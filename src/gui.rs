@@ -1,10 +1,56 @@
-use std::{io::Write, time::{Duration, Instant}};
+use std::{
+    collections::VecDeque,
+    io::Write,
+    time::{Duration, Instant},
+};
 
 use super::Viewport;
 use cgmath::{InnerSpace, Rotation3};
+use crossbeam_channel::{unbounded, Receiver, Sender};
 use egui::{Align, CornerRadius, Key, Layout, Pos2};
 use glow::HasContext;
 use winit::window::Window;
+
+use clap::{Arg, Command};
+use shell_words;
+
+fn process_console_command(command: String) -> String {
+    // Tokenize command line (split on whitespace) for clap
+    let args = shell_words::split(&command).unwrap_or_else(|_| vec![]);
+
+    let cli = Command::new("console")
+        .subcommand(
+            Command::new("echo")
+                .about("Prints text")
+                .arg(Arg::new("text").required(true).num_args(1..)),
+        )
+        .subcommand(
+            Command::new("add")
+                .about("Adds two numbers")
+                .arg(Arg::new("a").required(true))
+                .arg(Arg::new("b").required(true)),
+        );
+
+    match cli.try_get_matches_from(args) {
+        Ok(matches) => match matches.subcommand() {
+            Some(("echo", sub)) => {
+                let text: Vec<_> = sub
+                    .get_many::<String>("text")
+                    .unwrap()
+                    .map(|s| s.as_str())
+                    .collect();
+                format!("{}", text.join(" "))
+            }
+            Some(("add", sub)) => {
+                let a: f64 = sub.get_one::<String>("a").unwrap().parse().unwrap_or(0.0);
+                let b: f64 = sub.get_one::<String>("b").unwrap().parse().unwrap_or(0.0);
+                format!("Result: {}", a + b)
+            }
+            _ => "Unknown command or syntax error".to_string(),
+        },
+        Err(e) => format!("Error parsing command: {}", e),
+    }
+}
 
 #[derive(PartialEq)]
 enum Choice {
@@ -13,16 +59,26 @@ enum Choice {
     Ide,
 }
 
-use crate::{camera::Camera, scene_graph::{SceneGraph, SelectedObject}, CameraType};
+use crate::{
+    camera::Camera,
+    scene_graph::{SceneGraph, SelectedObject},
+    CameraType,
+};
 
 pub struct Gui {
+    command_tx: Sender<String>,
+    command_result_rx: Receiver<String>,
+
     choice: Choice,
-    terminal_io: (String, String),
+
+    terminal_input: String,
+    terminal_lines: VecDeque<String>,
+    max_terminal_lines: usize,
 
     viewport: Option<Viewport>,
-    
+
     frame_count: u32,
-    
+
     accumulator: Duration,
     last_frame_time: Instant,
     fps: u32,
@@ -34,19 +90,44 @@ pub struct Gui {
 
 impl Gui {
     pub fn new() -> Self {
-        Self {
+        let (command_tx, command_rx) = unbounded();
+        let (result_tx, command_result_rx) = unbounded();
+
+        let gui = Self {
+            command_tx,
+            command_result_rx,
+
             choice: Choice::Console,
-            terminal_io: (String::new(), String::new()),
-            
+            terminal_input: String::new(),
+            terminal_lines: VecDeque::new(),
+            max_terminal_lines: 100,
+
             viewport: None,
             frame_count: 0,
             accumulator: Duration::ZERO,
             last_frame_time: Instant::now(),
             fps: 0,
 
-            selected_object: Some(SelectedObject::StaticMesh(0)),
+            selected_object: None, // Some(SelectedObject::StaticMesh(0)),
             selected_script: None,
             selected_material: None,
+        };
+
+        std::thread::spawn(move || {
+            while let Ok(command) = command_rx.recv() {
+                // Here you process the command:
+                let output = process_console_command(command);
+                let _ = result_tx.send(output);
+            }
+        });
+
+        gui
+    }
+
+    fn append_terminal(&mut self, text: impl Into<String>) {
+        self.terminal_lines.push_back(text.into());
+        while self.terminal_lines.len() > self.max_terminal_lines {
+            self.terminal_lines.pop_front();
         }
     }
 
@@ -72,7 +153,15 @@ impl Gui {
         }
     }
 
-    pub fn update(&mut self, raw_input: egui::RawInput, ctx: &egui::Context, active_camera_type: &mut CameraType, camera: &mut dyn Camera, scene_graph: &mut SceneGraph, delta_time: f64) -> egui::FullOutput {
+    pub fn update(
+        &mut self,
+        raw_input: egui::RawInput,
+        ctx: &egui::Context,
+        active_camera_type: &mut CameraType,
+        camera: &mut dyn Camera,
+        scene_graph: &mut SceneGraph,
+        delta_time: f64,
+    ) -> egui::FullOutput {
         // Calculate the delta time
         let now = Instant::now();
         let dt = now - self.last_frame_time;
@@ -90,6 +179,10 @@ impl Gui {
         }
 
         let current_scene = scene_graph.current_scene().unwrap();
+
+        while let Ok(line) = self.command_result_rx.try_recv() {
+            self.append_terminal(line);
+        }
 
         ctx.run(raw_input, |ctx| {
             egui::SidePanel::left("Hierarchy")
@@ -146,12 +239,15 @@ impl Gui {
                         ui.visuals_mut().widgets.hovered.corner_radius = CornerRadius::same(5);
                         ui.visuals_mut().widgets.active.corner_radius = CornerRadius::same(5);
                         ui.selectable_value(&mut self.choice, Choice::Console, "Console");
-                        ui.selectable_value(&mut self.choice, Choice::ContentBrowser, "Content Browser");
-                        if let Some(script) = self.selected_script{
+                        ui.selectable_value(
+                            &mut self.choice,
+                            Choice::ContentBrowser,
+                            "Content Browser",
+                        );
+                        if let Some(script) = self.selected_script {
                             let mut x = current_scene.scripts.get(script).unwrap().clone();
                             x.push_str(".rs");
                             ui.selectable_value(&mut self.choice, Choice::Ide, x);
-                        
                         } else {
                             ui.selectable_value(&mut self.choice, Choice::Ide, "IDE");
                         }
@@ -160,7 +256,7 @@ impl Gui {
                     ui.separator();
 
                     if self.choice == Choice::Console {
-                        use egui::{ScrollArea, TextEdit, Key};
+                        use egui::{Key, ScrollArea, TextEdit};
 
                         // Output area: scrollable multiline, read-only
                         ScrollArea::vertical()
@@ -169,32 +265,25 @@ impl Gui {
                             .stick_to_bottom(true)
                             .show(ui, |ui| {
                                 ui.set_min_width(ui.available_width());
-                                ui.add(
-                                    TextEdit::multiline(&mut self.terminal_io.1)
-                                        .font(egui::TextStyle::Monospace)
-                                        .code_editor()
-                                        .desired_width(ui.available_width())
-                                        .desired_rows(10)
-                                        .interactive(false), // read-only
-                                );
+                                for line in &self.terminal_lines {
+                                    ui.monospace(line);
+                                }
                             });
 
                         // Input area: single-line editable input
-                        let input = &mut self.terminal_io.0;
-                        let enter_pressed = ui
-                            .add(TextEdit::singleline(input).hint_text("Enter command"))
-                            .lost_focus()
-                            && ui.input(|i| i.key_pressed(Key::Enter));
+                        let enter_pressed = {
+                            let input = &mut self.terminal_input;
+                            ui.add(TextEdit::singleline(input).hint_text("Enter command"))
+                                .lost_focus()
+                                && ui.input(|i: &egui::InputState| i.key_pressed(Key::Enter))
+                        };
 
                         if enter_pressed {
+                            let mut input = self.terminal_input.clone();
                             let command = input.trim();
                             if !command.is_empty() {
-                                // Append prompt + command to output
-                                self.terminal_io.1.push_str(&format!("> {}\n", command));
-
-                                // TODO: process the command, for now just echo back:
-                                self.terminal_io.1.push_str(&format!("You typed: {}\n", command));
-
+                                self.append_terminal(format!("> {}", command));
+                                let _ = self.command_tx.send(command.to_string());
                                 input.clear();
                             }
                         }
@@ -202,46 +291,63 @@ impl Gui {
                         use egui::TextEdit;
 
                         if self.selected_script == None {
-                            let mut file_content = String::from("fn main() {\n    println!(\"Hello World!\");\n}");
+                            let mut file_content =
+                                String::from("fn main() {\n    println!(\"Hello World!\");\n}");
                             ui.add(
-                            TextEdit::multiline(&mut file_content)
-                                .font(egui::TextStyle::Monospace)
-                                .code_editor()
-                                .desired_width(ui.available_width())
-                                .desired_rows(20),
+                                TextEdit::multiline(&mut file_content)
+                                    .font(egui::TextStyle::Monospace)
+                                    .code_editor()
+                                    .desired_width(ui.available_width())
+                                    .desired_rows(20),
                             );
 
                             // Save button
                             if ui.button("Save").clicked() {
                                 match std::fs::File::create_new("scripts/script1.rs") {
                                     Ok(mut file) => {
-                                        file.write_all(file_content.as_bytes()).unwrap();
-                                        self.terminal_io.1.push_str("Saving script!");
-                                        println!("Saving script!");
-                                    },
+                                        self.append_terminal("Saving script ...");
+                                        match file.write_all(file_content.as_bytes()) {
+                                            Ok(_) => {
+                                                self.append_terminal("Saved script!");
+                                            }
+                                            Err(e) => {
+                                                self.append_terminal(format!(
+                                                    "ERROR: Failed to Saved script!\n\t{}",
+                                                    e
+                                                ));
+                                            }
+                                        }
+                                    }
                                     Err(e) => {
                                         eprintln!("Error: {}", e);
-                                    },
+                                    }
                                 }
                             }
                         } else {
-                            let script_path = current_scene.scripts.get(self.selected_script.unwrap().clone()).unwrap();
+                            let script_path = current_scene
+                                .scripts
+                                .get(self.selected_script.unwrap().clone())
+                                .unwrap();
                             let mut file_content = std::fs::read_to_string(script_path).unwrap();
                             ui.add(
-                            TextEdit::multiline(&mut file_content)
-                                .font(egui::TextStyle::Monospace)
-                                .code_editor()
-                                .desired_width(ui.available_width())
-                                .desired_rows(20),
+                                TextEdit::multiline(&mut file_content)
+                                    .font(egui::TextStyle::Monospace)
+                                    .code_editor()
+                                    .desired_width(ui.available_width())
+                                    .desired_rows(20),
                             );
 
                             // Save button
                             if ui.button("Save").clicked() {
-                                let mut f = std::fs::File::create(script_path).unwrap();
-                                f.write_all(file_content.as_bytes()).unwrap();
-                                self.terminal_io.1.push_str("Saving script!");
-                                println!("Saving script!"); // : \n{}", self.ide_content);
-                                // TODO: write to disk
+                                let path = script_path.clone();
+                                let data = file_content.clone();
+                                rayon::spawn(move || {
+                                    if let Err(e) = std::fs::write(&path, data) {
+                                        eprintln!("Error saving {}: {}", path, e);
+                                    } else {
+                                        println!("Saved script: {}", path);
+                                    }
+                                });
                             }
                         }
                     } else {
@@ -266,9 +372,12 @@ impl Gui {
                 .show(ctx, |ui| {
                     if let Some(selected) = &mut self.selected_object {
                         match selected {
-                            SelectedObject::StaticMesh(index) => {   
-                                let mesh = current_scene.static_meshes.get_mut(*index).expect("Static mesh not found");
-                                
+                            SelectedObject::StaticMesh(index) => {
+                                let mesh = current_scene
+                                    .static_meshes
+                                    .get_mut(*index)
+                                    .expect("Static mesh not found");
+
                                 ui.label(format!("Selected Static Mesh: {}", index));
                                 ui.horizontal(|ui| {
                                     ui.label("Name");
@@ -292,13 +401,22 @@ impl Gui {
                                         Layout::right_to_left(Align::Center),
                                         |ui| {
                                             // The inputs are in the reverse order
-                                            ui.add(egui::DragValue::new(&mut mesh.translation.z).speed(0.05));
-                                            ui.add(egui::DragValue::new(&mut mesh.translation.y).speed(0.05));
-                                            ui.add(egui::DragValue::new(&mut mesh.translation.x).speed(0.05));
+                                            ui.add(
+                                                egui::DragValue::new(&mut mesh.translation.z)
+                                                    .speed(0.05),
+                                            );
+                                            ui.add(
+                                                egui::DragValue::new(&mut mesh.translation.y)
+                                                    .speed(0.05),
+                                            );
+                                            ui.add(
+                                                egui::DragValue::new(&mut mesh.translation.x)
+                                                    .speed(0.05),
+                                            );
                                         },
                                     );
                                 });
-                                
+
                                 ui.horizontal(|ui| {
                                     ui.label("Rotate");
                                     // Adds space between the text and inputs
@@ -307,9 +425,18 @@ impl Gui {
                                         Layout::right_to_left(Align::Center),
                                         |ui| {
                                             // The inputs are in the reverse order
-                                            ui.add(egui::DragValue::new(&mut mesh.rotation.z).speed(1.0));
-                                            ui.add(egui::DragValue::new(&mut mesh.rotation.y).speed(1.0));
-                                            ui.add(egui::DragValue::new(&mut mesh.rotation.x).speed(1.0));
+                                            ui.add(
+                                                egui::DragValue::new(&mut mesh.rotation.z)
+                                                    .speed(1.0),
+                                            );
+                                            ui.add(
+                                                egui::DragValue::new(&mut mesh.rotation.y)
+                                                    .speed(1.0),
+                                            );
+                                            ui.add(
+                                                egui::DragValue::new(&mut mesh.rotation.x)
+                                                    .speed(1.0),
+                                            );
                                         },
                                     );
                                 });
@@ -322,9 +449,15 @@ impl Gui {
                                         Layout::right_to_left(Align::Center),
                                         |ui| {
                                             // The inputs are in the reverse order
-                                            ui.add(egui::DragValue::new(&mut mesh.scale.z).speed(0.01));
-                                            ui.add(egui::DragValue::new(&mut mesh.scale.y).speed(0.01));
-                                            ui.add(egui::DragValue::new(&mut mesh.scale.x).speed(0.01));
+                                            ui.add(
+                                                egui::DragValue::new(&mut mesh.scale.z).speed(0.01),
+                                            );
+                                            ui.add(
+                                                egui::DragValue::new(&mut mesh.scale.y).speed(0.01),
+                                            );
+                                            ui.add(
+                                                egui::DragValue::new(&mut mesh.scale.x).speed(0.01),
+                                            );
                                         },
                                     );
                                 });
@@ -334,8 +467,7 @@ impl Gui {
                             }
                             SelectedObject::PerspectiveCamera(index) => {
                                 ui.label(format!("Selected Perspective Camera: {}", index));
-                            }
-                            // Add more cases as needed
+                            } // Add more cases as needed
                         }
                     } else {
                         ui.label("No object selected");
@@ -354,28 +486,48 @@ impl Gui {
                             }
 
                             ui.menu_button("Add", |ui| {
-                                if ui.button("Static Mesh").clicked() {
-                                    // current_scene.add_static_mesh();
+                                ui.menu_button("Mesh", |ui| {
+                                    if ui.button("Static Mesh").clicked() {
+                                        // current_scene.add_static_mesh();
+                                        self.append_terminal("Add Static Mesh ... TODO");
 
-                                    self.terminal_io.1.push_str("Add Static Mesh!");
-                                    println!("Add Static Mesh!");
-                                    ui.close_menu();
-                                }
-                                if ui.button("Dynamic Mesh").clicked() {
-                                    // current_scene.add_static_mesh();
+                                        ui.close_menu();
+                                    }
+                                    if ui.button("Dynamic Mesh").clicked() {
+                                        // current_scene.add_static_mesh();
 
-                                    self.terminal_io.1.push_str("Add Dynamic Mesh!");
-                                    println!("Add Dynamic Mesh!");
-                                    ui.close_menu();
-                                }
-                                if ui.button("Perspective Camera").clicked() {
-                                    println!("Add Perspective Camera!");
-                                    ui.close_menu();
-                                }
-                                if ui.button("Light").clicked() {
-                                    println!("Add Light!");
-                                    ui.close_menu();
-                                }
+                                        self.append_terminal("Add Dynamic Mesh ... TODO");
+                                        ui.close_menu();
+                                    }
+                                });
+
+                                ui.menu_button("Camera", |ui| {
+                                    if ui.button("Perspective Camera").clicked() {
+                                        self.append_terminal("Add Perspective Camera!");
+                                        ui.close_menu();
+                                    }
+                                    if ui.button("Orthographic Camera").clicked() {
+                                        self.append_terminal("Add Orthographic Camera!");
+                                        ui.close_menu();
+                                    }
+                                });
+
+                                ui.menu_button("Light", |ui| {
+                                    if ui.button("Point Light").clicked() {
+                                        self.append_terminal("Add Point Light!");
+                                        ui.close_menu();
+                                    }
+
+                                    if ui.button("Spot Light").clicked() {
+                                        self.append_terminal("Add Ambient Light!");
+                                        ui.close_menu();
+                                    }
+
+                                    if ui.button("Ambient Light").clicked() {
+                                        self.append_terminal("Add Ambient Light!");
+                                        ui.close_menu();
+                                    }
+                                });
                             });
 
                             if ui.button("Perspective").clicked() {
@@ -386,35 +538,57 @@ impl Gui {
                             }
                         });
                     });
-                
+
                 ui.input(|input| {
-                    if input.key_pressed(egui::Key::W) {
-                        self.terminal_io.1.push_str("W: Pressed\n");
-                        camera.set_position(camera.get_position() + camera.get_speed() * camera.get_orientation() * delta_time as f32);
+                    if input.key_down(egui::Key::W) {
+                        camera.set_position(
+                            camera.get_position()
+                                + camera.get_speed() * camera.get_orientation() * delta_time as f32,
+                        );
                     }
-                    if input.key_pressed(egui::Key::A) {
-                        self.terminal_io.1.push_str("A: Pressed\n");
-                        camera.set_position(camera.get_position() + camera.get_speed() * -cgmath::Vector3::normalize(cgmath::Vector3::cross(camera.get_orientation(), camera.get_up())) * delta_time as f32);
+                    if input.key_down(egui::Key::A) {
+                        camera.set_position(
+                            camera.get_position()
+                                + camera.get_speed()
+                                    * -cgmath::Vector3::normalize(cgmath::Vector3::cross(
+                                        camera.get_orientation(),
+                                        camera.get_up(),
+                                    ))
+                                    * delta_time as f32,
+                        );
                     }
-                    if input.key_pressed(egui::Key::S) {
-                        self.terminal_io.1.push_str("S: Pressed\n");
-                        camera.set_position(camera.get_position() + camera.get_speed() * -camera.get_orientation() * delta_time as f32);
+                    if input.key_down(egui::Key::S) {
+                        camera.set_position(
+                            camera.get_position()
+                                + camera.get_speed()
+                                    * -camera.get_orientation()
+                                    * delta_time as f32,
+                        );
                     }
-                    if input.key_pressed(egui::Key::D) {
-                        self.terminal_io.1.push_str("D: Pressed\n");
-                        camera.set_position(camera.get_position() + camera.get_speed() * cgmath::Vector3::normalize(cgmath::Vector3::cross(camera.get_orientation(), camera.get_up())) * delta_time as f32);
+                    if input.key_down(egui::Key::D) {
+                        camera.set_position(
+                            camera.get_position()
+                                + camera.get_speed()
+                                    * cgmath::Vector3::normalize(cgmath::Vector3::cross(
+                                        camera.get_orientation(),
+                                        camera.get_up(),
+                                    ))
+                                    * delta_time as f32,
+                        );
                     }
-                    if input.key_pressed(egui::Key::Space) {
-                        self.terminal_io.1.push_str("Space: Pressed\n");
-                        camera.set_position(camera.get_position() + camera.get_speed() * camera.get_up() * delta_time as f32);
+                    if input.key_down(egui::Key::Space) {
+                        camera.set_position(
+                            camera.get_position()
+                                + camera.get_speed() * camera.get_up() * delta_time as f32,
+                        );
                     }
-                    if input.key_pressed(egui::Key::ArrowDown) {
-                        self.terminal_io.1.push_str("ArrowDown: Pressed\n");
-                        camera.set_position(camera.get_position() + camera.get_speed() * -camera.get_up() * delta_time as f32);
+                    if input.key_down(egui::Key::ArrowDown) {
+                        camera.set_position(
+                            camera.get_position()
+                                + camera.get_speed() * -camera.get_up() * delta_time as f32,
+                        );
                     }
                     if input.pointer.button_down(egui::PointerButton::Primary) {
-                        self.terminal_io.1.push_str("Mouse button 1: Pressed\n");
-
                         if camera.get_first_click() {
                             if let Some(pos) = input.pointer.hover_pos() {
                                 camera.set_last_mouse_pos(pos); // store initial pos
@@ -427,11 +601,14 @@ impl Gui {
                             let delta_x = pos.x - camera.get_last_mouse_pos().x;
                             let delta_y = pos.y - camera.get_last_mouse_pos().y;
 
-                            let rot_x = camera.get_sensitivity() * (delta_y as f32) / camera.get_height() as f32;
-                            let rot_y = camera.get_sensitivity() * (delta_x as f32) / camera.get_width() as f32;
+                            let rot_x = camera.get_sensitivity() * (delta_y as f32)
+                                / camera.get_height() as f32;
+                            let rot_y = camera.get_sensitivity() * (delta_x as f32)
+                                / camera.get_width() as f32;
 
                             let right = camera.get_orientation().cross(camera.get_up()).normalize();
-                            let pitch_quat = cgmath::Quaternion::from_axis_angle(right, cgmath::Deg(-rot_x));
+                            let pitch_quat =
+                                cgmath::Quaternion::from_axis_angle(right, cgmath::Deg(-rot_x));
 
                             let new_orientation = pitch_quat * camera.get_orientation();
 
@@ -440,16 +617,18 @@ impl Gui {
                                 camera.set_orientation(new_orientation);
                             }
 
-                            let yaw_quat = cgmath::Quaternion::from_axis_angle(camera.get_up(), cgmath::Deg(-rot_y));
+                            let yaw_quat = cgmath::Quaternion::from_axis_angle(
+                                camera.get_up(),
+                                cgmath::Deg(-rot_y),
+                            );
                             camera.set_orientation(yaw_quat * camera.get_orientation());
 
                             // Update last mouse pos
-                            camera.set_last_mouse_pos( pos);
+                            camera.set_last_mouse_pos(pos);
                         }
                     } else {
                         camera.set_first_click(true);
                     }
-                    
                 });
 
                 ui.horizontal(|ui| {

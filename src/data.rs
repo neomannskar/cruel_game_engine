@@ -1,122 +1,88 @@
-use glow::*;
+use std::path::PathBuf;
+
+use crate::opengl::{DynamicRenderData, StaticRenderData};
+
+#[derive(Debug)]
+pub enum Color {
+    Rgb(Vec<[f32; 3]>),
+    Rgba(Vec<[f32; 4]>),
+}
+
+#[derive(Debug)]
+pub struct Uv(pub Vec<[f32; 2]>);
+
+#[derive(Debug)]
+pub struct VertexData {
+    pub positions: Vec<[f32; 3]>, // Required
+
+    pub normals: Option<Vec<[f32; 3]>>,  // Optional
+    pub tangents: Option<Vec<[f32; 4]>>, // Optional
+
+    /// Supports multiple texcoord sets (TEXCOORD_0, TEXCOORD_1, etc.)
+    pub texcoords: Vec<Uv>, // Optional; empty Vec if none
+
+    /// Supports multiple color sets (COLOR_0, COLOR_1, etc.)
+    pub colors: Vec<Color>, // Optional; empty Vec if none
+
+    pub joints: Option<Vec<[u16; 4]>>,  // Optional (skinning)
+    pub weights: Option<Vec<[f32; 4]>>, // Optional (skinning)                // Optional; None = non-indexed
+}
+
+#[derive(Debug)]
+pub struct LoadedTexture {
+    pub name: String,
+    pub path: PathBuf,
+    pub width: u32,
+    pub height: u32,
+    pub data: Vec<u8>, // RGBA8 pixels
+}
+
+#[derive(Debug)]
+pub struct LoadedMaterial {
+    pub base_color_texture: Option<PathBuf>,
+    pub metallic_roughness_texture: Option<PathBuf>,
+    pub normal_texture: Option<PathBuf>,
+    pub occlusion_texture: Option<PathBuf>,
+    pub emissive_texture: Option<PathBuf>,
+
+    pub base_color_factor: Color, // fallback if no texture
+    pub metallic_factor: f32,
+    pub roughness_factor: f32,
+
+    pub alpha_mode: bool,
+    pub double_sided: bool,
+}
+
+#[derive(Debug)]
+pub struct LoadedPrimitive {
+    pub vertex_data: VertexData,
+    pub material: Option<LoadedMaterial>,
+    pub indices: Option<Vec<u32>>,
+}
 
 #[derive(Debug, Clone)]
-pub struct StaticRenderData {
-    pub vao: NativeVertexArray,
-    pub vbo: NativeBuffer,
-    pub ebo: Option<NativeBuffer>,
+pub struct StaticPrimitiveInstance {
+    pub primitive_index: usize, // Index into LoadedMesh.primitives
+    pub render_data: Option<StaticRenderData>, // VAO/VBO/EBO for this primitive
 }
 
-impl StaticRenderData {
-    pub fn new(context: &glow::Context, vertices: &[f32], indices: &[u32]) -> Self {
-        unsafe {
-            let vao = context.create_vertex_array().unwrap();
-            context.bind_vertex_array(Some(vao));
-            let vbo = context.create_buffer().unwrap();
-            context.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
-            context.buffer_data_u8_slice(
-                glow::ARRAY_BUFFER,
-                bytemuck::cast_slice(vertices),
-                glow::STATIC_DRAW,
-            );
-
-            let ebo = context.create_buffer().unwrap();
-            context.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(ebo));
-            context.buffer_data_u8_slice(
-                glow::ELEMENT_ARRAY_BUFFER,
-                bytemuck::cast_slice(indices),
-                glow::STATIC_DRAW,
-            );
-            
-            Self {
-                vao,
-                vbo,
-                ebo: Some(ebo),
-            }
-        }
-    }
-
-    /* pub fn from(vao: NativeVertexArray, vbo: NativeBuffer, ebo: Option<NativeBuffer>) -> Self {
-        Self {
-            vao,
-            vbo,
-            ebo,
-        }
-    } */
-
-    pub fn bind(&self, context: &glow::Context) {
-        unsafe {
-            context.bind_vertex_array(Some(self.vao));
-            context.bind_buffer(glow::ARRAY_BUFFER, Some(self.vbo));
-            
-            let stride = (8 * std::mem::size_of::<f32>()) as i32;
-
-            context.vertex_attrib_pointer_f32(0, 3, glow::FLOAT, false, stride, 0);
-            context.enable_vertex_attrib_array(0);
-
-            context.vertex_attrib_pointer_f32(1, 2, glow::FLOAT, false, stride, (3 * std::mem::size_of::<f32>()) as i32);
-            context.enable_vertex_attrib_array(1);
-
-            context.vertex_attrib_pointer_f32(2, 3, glow::FLOAT, false, stride, (5 * std::mem::size_of::<f32>()) as i32);
-            context.enable_vertex_attrib_array(2);
-            
-            if let Some(ebo) = self.ebo {
-                context.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(ebo));
-            }
-        }
-    }
+#[derive(Debug, Clone)]
+pub struct DynamicPrimitiveInstance {
+    pub primitive_index: usize, // Index into LoadedMesh.primitives
+    pub render_data: Option<DynamicRenderData>, // VAO/VBO/EBO for this primitive
 }
 
-pub struct DynamicRenderData {
-    pub vao: NativeVertexArray,
-    pub vbo: NativeBuffer,
-    pub ebo: Option<NativeBuffer>,
+// StreamPrimitiveInstance
+
+#[derive(Debug)]
+pub struct LoadedMesh {
+    pub name: String,
+    pub path: PathBuf,
+    pub primitives: Vec<LoadedPrimitive>,
 }
 
-impl DynamicRenderData {
-    pub fn new(context: &glow::Context, vertices: &[f32], indices: &[u32]) -> Self {
-        unsafe {
-            let vao = context.create_vertex_array().unwrap();
-            context.bind_vertex_array(Some(vao));
-            let vbo = context.create_buffer().unwrap();
-            context.bind_buffer(glow::ARRAY_BUFFER, Some(vbo));
-            context.buffer_data_u8_slice(
-                glow::ARRAY_BUFFER,
-                bytemuck::cast_slice(vertices),
-                glow::DYNAMIC_DRAW,
-            );
-
-            let ebo = context.create_buffer().unwrap();
-            context.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(ebo));
-            context.buffer_data_u8_slice(
-                glow::ELEMENT_ARRAY_BUFFER,
-                bytemuck::cast_slice(indices),
-                glow::DYNAMIC_DRAW,
-            );
-            
-            Self {
-                vao,
-                vbo,
-                ebo: Some(ebo),
-            }
-        }
-    }
-
-    pub fn from(vao: NativeVertexArray, vbo: NativeBuffer, ebo: Option<NativeBuffer>) -> Self {
-        Self {
-            vao,
-            vbo,
-            ebo,
-        }
-    }
-
-    pub fn bind(&self, context: &glow::Context) {
-        unsafe {
-            context.bind_vertex_array(Some(self.vao));
-            context.bind_buffer(glow::ARRAY_BUFFER, Some(self.vbo));
-            if let Some(ebo) = self.ebo {
-                context.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(ebo));
-            }
-        }
-    }
+#[derive(Debug)]
+pub struct CompiledShaderProgram {
+    pub name: String,
+    pub path: PathBuf,
 }

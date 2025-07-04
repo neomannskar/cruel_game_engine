@@ -8,6 +8,11 @@ pub struct Viewport {
 
 impl Viewport {
     pub fn new(x: i32, y: i32, width: i32, height: i32) -> Self {
-        Self { x, y, width, height }
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
     }
 }

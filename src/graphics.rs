@@ -16,11 +16,7 @@ impl GraphicsExample {
         let texture = create_texture(gl, "assets/texture.jpg");
 
         let shader_program =
-            create_shader_program(
-                gl,
-                "shaders/vertex.glsl",
-                "shaders/fragment.glsl"
-            );
+            create_shader_program(gl, "shaders/vertex.glsl", "shaders/fragment.glsl");
 
         let verticies: Vec<f32> = vec![
             //   Position           Tex Coords  Color

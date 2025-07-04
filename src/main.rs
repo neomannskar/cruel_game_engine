@@ -1,6 +1,7 @@
+use rayon::prelude::*;
 use std::ffi::CString;
 use std::num::NonZeroU32;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use egui_glow::Painter;
@@ -19,7 +20,14 @@ use winit::window::{Window, WindowId};
 use egui_winit::State as EguiState;
 
 mod graphics;
-use graphics::GraphicsExample;
+
+mod data;
+mod handles;
+
+mod shaders;
+
+mod loader;
+use loader::AssetLoader;
 
 mod gui;
 use gui::Gui;
@@ -32,20 +40,16 @@ use viewport::Viewport;
 
 mod camera;
 use camera::{Camera, PerspectiveCamera};
-
-mod data;
-use data::{StaticRenderData, DynamicRenderData};
-
 mod material;
-use material::Material;
-
 mod mesh;
-use mesh::{StaticMesh, DynamicMesh};
+mod opengl;
 
 mod scene_graph;
 use scene_graph::SceneGraph;
 
 use crate::camera::OrthographicCamera;
+use crate::loader::{Asset /* AssetHandle */};
+use crate::opengl::Layout;
 use crate::scene_graph::SceneNode;
 
 #[derive(PartialEq, Clone, Copy)]
@@ -62,8 +66,7 @@ struct Timer {
 impl Timer {
     fn new(last_frame_time: std::time::Instant) -> Timer {
         let now = Instant::now();
-        let mut timer = 
-        Timer {
+        let mut timer = Timer {
             last_frame: last_frame_time,
             delta_time: now.duration_since(last_frame_time).as_secs_f64(),
         };
@@ -91,11 +94,11 @@ struct App {
     window: Option<Window>,
     current_context: Option<PossiblyCurrentContext>,
     surface: Option<Surface<WindowSurface>>,
-    
-    gl: Option<Arc<glow::Context>>,
 
+    asset_loader: Option<Arc<Mutex<AssetLoader>>>,
+
+    context: Option<Arc<glow::Context>>,
     gui: Option<Gui>,
-    
     active_editor_camera_type: Option<CameraType>,
     editor_cameras: Option<(Box<PerspectiveCamera>, Box<OrthographicCamera>)>,
     editor_cameras_updated: Option<bool>,
@@ -105,6 +108,35 @@ struct App {
     egui_context: Option<egui::Context>,
     egui_painter: Option<Painter>,
     egui_state: Option<EguiState>,
+}
+
+impl App {
+    pub fn new() -> Self {
+        let mut app = Self::default();
+        app.asset_loader = Some(Arc::new(Mutex::new(AssetLoader::new())));
+        app
+    }
+
+    pub fn request_texture<P: AsRef<std::path::Path>>(&self, path: P, name: String) {
+        if let Some(asset_loader) = &self.asset_loader {
+            asset_loader
+                .lock()
+                .unwrap()
+                .request_texture(path, name);
+        } else {
+            eprintln!("Asset loader not initialized when requesting texture!");
+        }
+    }
+
+    pub fn request_textures_parallel(&self, requests: &[(String, String)]) {
+        if let Some(asset_loader) = &self.asset_loader {
+            let asset_loader = Arc::clone(asset_loader);
+            requests.par_iter().for_each(|(path, name)| {
+                let loader = asset_loader.lock().unwrap();
+                loader.request_texture(path, name.clone());
+            });
+        }
+    }
 }
 
 impl ApplicationHandler for App {
@@ -174,6 +206,13 @@ impl ApplicationHandler for App {
         // Make the context current
         let current_context = non_current_context.make_current(&surface).unwrap();
 
+        surface
+            .set_swap_interval(
+                &current_context,
+                glutin::surface::SwapInterval::Wait(NonZeroU32::new(1).unwrap()),
+            )
+            .expect("Failed to set vsync");
+
         // Create the glow context
         let gl = unsafe {
             Arc::new(glow::Context::from_loader_function(|s| {
@@ -184,72 +223,116 @@ impl ApplicationHandler for App {
 
         self.surface = Some(surface);
         self.current_context = Some(current_context);
-        self.gl = Some(gl);
-        
+        self.context = Some(gl);
+
         // self.graphics_example = Some(GraphicsExample::new(self.gl.as_ref().unwrap()));
-        
+
         let cube_vertices: Vec<f32> = vec![
-            //   Position           Tex Coords  Color
-            // Front face
-            -1.0, -1.0, -1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, -1.0, -1.0, 1.0, 0.0, 0.0, 1.0, 0.0,
-            1.0, 1.0, -1.0, 1.0, 1.0, 0.0, 0.0, 1.0, -1.0, 1.0, -1.0, 0.0, 1.0, 0.0, 1.0, 1.0,
-            // Back face
-            -1.0, -1.0, 1.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, -1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0,
-            1.0, 1.0, 0.0, 1.0, 0.0, 0.0, 1.0, -1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 1.0, 1.0,
-            // Left face
-            -1.0, -1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, -1.0, -1.0, -1.0, 1.0, 0.0, 0.0, 1.0, 0.0,
-            -1.0, 1.0, -1.0, 1.0, 1.0, 0.0, 0.0, 1.0, -1.0, 1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0,
-            // Right face
-            1.0, -1.0, -1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, -1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0,
-            1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, -1.0, 0.0, 1.0, 0.0, 1.0, 1.0,
-            // Bottom face
-            -1.0, -1.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, -1.0, 1.0, 1.0, 1.0, 0.0, 1.0, 0.0, 1.0,
-            -1.0, -1.0, 1.0, 0.0, 0.0, 0.0, 1.0, -1.0, -1.0, -1.0, 0.0, 0.0, 0.0, 1.0, 1.0,
-            // Top face
-            -1.0, 1.0, -1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, -1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0,
-            1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, -1.0, 1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0,
+            // Each: x, y, z, u, v, r, g, b
+
+            // Front face (+Z)
+            -1.0, -1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, // 0
+            1.0, -1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0, // 1
+            1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, // 2
+            -1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 0.0, // 3
+            // Back face (-Z)
+            1.0, -1.0, -1.0, 0.0, 0.0, 1.0, 0.0, 1.0, // 4
+            -1.0, -1.0, -1.0, 1.0, 0.0, 0.0, 1.0, 1.0, // 5
+            -1.0, 1.0, -1.0, 1.0, 1.0, 1.0, 1.0, 0.0, // 6
+            1.0, 1.0, -1.0, 0.0, 1.0, 0.0, 1.0, 0.5, // 7
+            // Left face (-X)
+            -1.0, -1.0, -1.0, 0.0, 0.0, 0.5, 0.5, 1.0, // 8
+            -1.0, -1.0, 1.0, 1.0, 0.0, 0.5, 1.0, 0.5, // 9
+            -1.0, 1.0, 1.0, 1.0, 1.0, 0.5, 0.5, 0.5, //10
+            -1.0, 1.0, -1.0, 0.0, 1.0, 0.5, 0.0, 0.5, //11
+            // Right face (+X)
+            1.0, -1.0, 1.0, 0.0, 0.0, 1.0, 0.5, 0.0, //12
+            1.0, -1.0, -1.0, 1.0, 0.0, 1.0, 0.0, 0.5, //13
+            1.0, 1.0, -1.0, 1.0, 1.0, 0.0, 0.5, 1.0, //14
+            1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 0.0, //15
+            // Bottom face (-Y)
+            -1.0, -1.0, -1.0, 0.0, 0.0, 1.0, 0.0, 0.0, //16
+            1.0, -1.0, -1.0, 1.0, 0.0, 0.0, 1.0, 0.0, //17
+            1.0, -1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, //18
+            -1.0, -1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 0.0, //19
+            // Top face (+Y)
+            -1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, //20
+            1.0, 1.0, 1.0, 1.0, 0.0, 1.0, 0.0, 1.0, //21
+            1.0, 1.0, -1.0, 1.0, 1.0, 1.0, 1.0, 1.0, //22
+            -1.0, 1.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, //23
         ];
 
         let cube_indices: Vec<u32> = vec![
-            // Front face
-            0, 1, 2, 2, 3, 0, // Back face
-            4, 5, 6, 6, 7, 4, // Left face
-            8, 9, 10, 10, 11, 8, // Right face
-            12, 13, 14, 14, 15, 12, // Bottom face
-            16, 17, 18, 18, 19, 16, // Top face
-            20, 21, 22, 22, 23, 20,
+            0, 1, 2, 2, 3, 0, // Front
+            4, 5, 6, 6, 7, 4, // Back
+            8, 9, 10, 10, 11, 8, // Left
+            12, 13, 14, 14, 15, 12, // Right
+            16, 17, 18, 18, 19, 16, // Bottom
+            20, 21, 22, 22, 23, 20, // Top
         ];
 
-        let mut cube = StaticMesh::new(
+        /* Commented out for now
+
+        let mut cube = StaticMesh::from(
             "Cube".to_string(),
             cube_vertices,
             cube_indices,
         );
 
-        let render_data = StaticRenderData::new(
-            self.gl.as_ref().unwrap(),
+        let stride = (8 * std::mem::size_of::<f32>()) as i32;
+        let layouts = vec![
+            Layout::new(0, 3, glow::FLOAT, false, 0),
+            Layout::new(1, 2, glow::FLOAT, false, 3 * std::mem::size_of::<f32>()),
+            Layout::new(2, 3, glow::FLOAT, false, 5 * std::mem::size_of::<f32>()),
+        ];
+
+        let render_data = StaticRenderData::from(
+            self.context.as_ref().unwrap(),
             &cube.vertices,
             &cube.indices,
+            stride,
+            layouts,
         );
 
         cube.set_render_data(render_data);
+        */
 
-        let mut scene = SceneNode::new("Main Scene", &self.gl.as_ref().unwrap());
-        scene.add_static_mesh(cube);
+        let scene = SceneNode::new("Main Scene", &self.context.as_ref().unwrap());
 
-        let texture = Texture::new(&self.gl.as_ref().unwrap(), "Texture0".to_string(), "assets/texture.jpg");
-        scene.add_texture(texture);
+        // scene.add_static_mesh(cube);
+
+        let mut asset_loader = self.asset_loader.as_ref().unwrap().lock().unwrap();
+        let loaded_assets = asset_loader.poll_loaded();
+        for (handle, asset) in loaded_assets {
+            match asset {
+                Asset::Mesh(loaded_mesh) => {
+                    asset_loader
+                        .loaded_mesh_data
+                        .insert(handle.as_mesh_handle().unwrap(), loaded_mesh);
+                }
+                Asset::Texture(loaded_texture) => {
+                    asset_loader
+                        .loaded_texture_data
+                        .insert(handle.as_texture_handle().unwrap(), loaded_texture);
+                }
+                _ => unimplemented!(),
+            }
+        }
 
         self.scene_graph = Some(SceneGraph::new());
-        self.scene_graph.as_mut().unwrap().scenes.push(Box::new(scene));
-        
+        self.scene_graph
+            .as_mut()
+            .unwrap()
+            .scenes
+            .push(Box::new(scene));
+
         self.gui = Some(Gui::new());
 
         self.active_editor_camera_type = Some(CameraType::Perspective);
 
         self.egui_context = Some(egui::Context::default());
         self.egui_painter = Some(
-            Painter::new(self.gl.as_ref().unwrap().clone(), "", None, false)
+            Painter::new(self.context.as_ref().unwrap().clone(), "", None, false)
                 .expect("Failed to create egui_glow painter"),
         );
         self.egui_state = Some(EguiState::new(
@@ -292,6 +375,8 @@ impl ApplicationHandler for App {
 
         self.editor_cameras_updated = Some(false);
 
+        // Move to "new" function: self.asset_loader = Some(AssetLoader::new());
+
         self.timer = Some(Timer::new(Instant::now()));
     }
 
@@ -313,7 +398,10 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 // Clear the framebuffer
-                self.gui.as_ref().unwrap().clear(self.gl.as_ref().unwrap());
+                self.gui
+                    .as_ref()
+                    .unwrap()
+                    .clear(self.context.as_ref().unwrap());
 
                 let active_camera: &mut dyn Camera = match &mut self.editor_cameras {
                     Some((persp, ortho)) => match self.active_editor_camera_type {
@@ -377,7 +465,7 @@ impl ApplicationHandler for App {
                 if let Some(sg) = self.scene_graph.as_mut() {
                     if let Some(scene) = sg.current_scene() {
                         scene.update(active_camera);
-                        scene.render(self.gl.as_ref().unwrap(), active_camera, &self.gui.as_ref().unwrap().get_viewport(window).expect(
+                        scene.render(self.context.as_ref().unwrap(), active_camera, &self.gui.as_ref().unwrap().get_viewport(window).expect(
                         "Viewport not present, make sure to update the ui before calling this",
                         ),);
                     }
@@ -409,11 +497,12 @@ fn main() {
     let event_loop = EventLoop::new().unwrap();
 
     // ControlFlow::Wait pauses the event loop if no events are available to process.
-    event_loop.set_control_flow(ControlFlow::Wait);
+    event_loop.set_control_flow(ControlFlow::Poll);
 
-    let mut app = App::default();
+    let mut app = App::new();
 
     // Add entities, components and systems to the app here
+    app.request_texture("assets/texture.jpg", "sigma.jpg".to_string());
 
     // Run the app when behaviour is defined
     event_loop.run_app(&mut app).unwrap();

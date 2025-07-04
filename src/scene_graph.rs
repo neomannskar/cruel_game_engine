@@ -1,6 +1,12 @@
 use std::fs;
 
-use crate::{camera::{Camera, PerspectiveCamera}, material::Material, mesh::{DynamicMesh, StaticMesh}, textures::Texture, viewport::Viewport};
+use crate::{
+    camera::{Camera, PerspectiveCamera},
+    material::Material,
+    mesh::{DynamicMesh, StaticMesh},
+    textures::Texture,
+    viewport::Viewport,
+};
 use cgmath::{Deg, Matrix, Rad, Rotation3};
 use egui::*;
 use glow::HasContext;
@@ -14,15 +20,18 @@ pub enum SelectedObject {
 
 pub struct SceneNode {
     pub name: String,
+
     pub perspective_cameras: Vec<PerspectiveCamera>,
+
     pub static_meshes: Vec<StaticMesh>,
     pub dynamic_meshes: Vec<DynamicMesh>,
+    // pub stream_meshes: Vec<StreamMesh>,
     pub textures: Vec<Texture>,
     pub materials: Vec<Material>,
+    // pub shaders: Vec<ShaderProgram>,
     pub scripts: Vec<String>,
-    
-    pub default_program: glow::NativeProgram,
 
+    pub default_program: glow::NativeProgram,
     // pub children: Vec<SceneNode>,
 }
 
@@ -109,28 +118,33 @@ impl SceneNode {
         }
     }
 
-    pub fn update(
-        &mut self,
-        camera: &mut dyn Camera,
-    ) {
+    pub fn update(&mut self, camera: &mut dyn Camera) {
         camera.update_matrices();
     }
 
     pub fn render(&self, context: &glow::Context, camera: &mut dyn Camera, viewport: &Viewport) {
         // Simple rendering logic, later the ecs will query the entities with a render system material and mesh's
-        
+
         unsafe {
             context.clear(glow::DEPTH_BUFFER_BIT);
+            context.enable(glow::CULL_FACE);
             context.enable(glow::DEPTH_TEST);
             context.depth_func(glow::LESS);
             // Makes sure that everything is renderered in the central panel of the ui
             context.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
         }
-        
+
         unsafe {
-            context.bind_texture(glow::TEXTURE_2D, Some(self.textures.get(0).unwrap().texture));
+            // Very bad, just in place to make it run
+            if self.textures.len() > 0 {
+                context.bind_texture(
+                    glow::TEXTURE_2D,
+                    Some(self.textures.get(0).unwrap().texture),
+                );
+            }
+            
             context.use_program(Some(self.default_program));
-        
+
             context.active_texture(glow::TEXTURE0);
 
             let texture_uniform = context
@@ -138,8 +152,6 @@ impl SceneNode {
                 .expect("Could not find the uniform called 'image'");
             context.uniform_1_i32(Some(&texture_uniform), 0);
         }
-
-
 
         for static_mesh in &self.static_meshes {
             let model_matrix = cgmath::Matrix4::from_translation(static_mesh.translation)
@@ -152,10 +164,8 @@ impl SceneNode {
                     static_mesh.scale.z,
                 );
 
-            let mvp_matrix = camera.get_projection()
-                * camera.get_view()
-                * model_matrix;
-            
+            let mvp_matrix = camera.get_projection() * camera.get_view() * model_matrix;
+
             // Very bad way to convert the matrix to a slice, but it works for now
             // Later we can use a more efficient way to convert the matrix to a slice
             let mvp_array: &[f32; 16] = unsafe { std::mem::transmute(&mvp_matrix) };
