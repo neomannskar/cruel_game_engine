@@ -49,6 +49,7 @@ use scene_graph::SceneGraph;
 
 use crate::camera::OrthographicCamera;
 use crate::loader::{Asset /* AssetHandle */};
+use crate::mesh::StaticMesh;
 use crate::opengl::Layout;
 use crate::scene_graph::SceneNode;
 
@@ -134,6 +135,27 @@ impl App {
             requests.par_iter().for_each(|(path, name)| {
                 let loader = asset_loader.lock().unwrap();
                 loader.request_texture(path, name.clone());
+            });
+        }
+    }
+
+    pub fn request_mesh<P: AsRef<std::path::Path>>(&self, path: P, name: String) {
+        if let Some(asset_loader) = &self.asset_loader {
+            asset_loader
+                .lock()
+                .unwrap()
+                .request_mesh(path, name);
+        } else {
+            eprintln!("Asset loader not initialized when requesting mesh!");
+        }
+    }
+
+    pub fn request_meshes_parallel(&self, requests: &[(String, String)]) {
+        if let Some(asset_loader) = &self.asset_loader {
+            let asset_loader = Arc::clone(asset_loader);
+            requests.par_iter().for_each(|(path, name)| {
+                let loader = asset_loader.lock().unwrap();
+                loader.request_mesh(path, name.clone());
             });
         }
     }
@@ -416,9 +438,11 @@ impl ApplicationHandler for App {
                 let full_output = self.gui.as_mut().unwrap().update(
                     self.egui_state.as_mut().unwrap().take_egui_input(window),
                     self.egui_context.as_ref().unwrap(),
+                    &self.context.as_ref().unwrap(),
                     self.active_editor_camera_type.as_mut().unwrap(),
                     active_camera,
                     self.scene_graph.as_mut().unwrap(),
+                    &self.asset_loader.as_ref().unwrap().lock().unwrap(),
                     self.timer.as_ref().unwrap().delta_time,
                 );
 
@@ -450,6 +474,33 @@ impl ApplicationHandler for App {
                 // let v = self.gui.as_ref().unwrap().get_viewport(window).unwrap();
                 // self.editor_cameras.as_mut().unwrap().0.fov = (v.width / v.height) as f32;
 
+                // Poll and integrate any newly loaded assets
+                if let Some(asset_loader) = &self.asset_loader {
+                    let mut asset_loader = asset_loader.lock().unwrap();
+                    let loaded_assets = asset_loader.poll_loaded();
+                    for (handle, asset) in loaded_assets {
+                        match asset {
+                            Asset::Mesh(loaded_mesh) => {
+                                println!("Mesh loaded: {}", loaded_mesh.name);
+
+                                // Store mesh in AssetLoader/AssetLibrary instead of adding directly to scene
+                                asset_loader
+                                    .loaded_mesh_data
+                                    .insert(handle.as_mesh_handle().unwrap(), loaded_mesh);
+
+                                // Optionally: mark the mesh as "ready" for adding in the GUI
+                            }
+                            Asset::Texture(loaded_texture) => {
+                                println!("Texture loaded: {}", loaded_texture.name);
+                                asset_loader
+                                    .loaded_texture_data
+                                    .insert(handle.as_texture_handle().unwrap(), loaded_texture);
+                            }
+                            _ => unimplemented!(),
+                        }
+                    }
+                }
+
                 let active_camera: &mut dyn Camera = match &mut self.editor_cameras {
                     Some((persp, ortho)) => match self.active_editor_camera_type {
                         Some(CameraType::Perspective) => persp.as_mut(),
@@ -463,7 +514,7 @@ impl ApplicationHandler for App {
 
                 // Render the scene
                 if let Some(sg) = self.scene_graph.as_mut() {
-                    if let Some(scene) = sg.current_scene() {
+                    if let Some(scene) = sg.current_scene_mut() {
                         scene.update(active_camera);
                         scene.render(self.context.as_ref().unwrap(), active_camera, &self.gui.as_ref().unwrap().get_viewport(window).expect(
                         "Viewport not present, make sure to update the ui before calling this",
@@ -503,6 +554,7 @@ fn main() {
 
     // Add entities, components and systems to the app here
     app.request_texture("assets/texture.jpg", "sigma.jpg".to_string());
+    app.request_mesh("models/bunny_gltf.glb", "bunny.glb".to_string());
 
     // Run the app when behaviour is defined
     event_loop.run_app(&mut app).unwrap();

@@ -2,7 +2,7 @@ use cgmath::SquareMatrix;
 use glow::HasContext;
 
 use crate::{
-    data::{Color, DynamicPrimitiveInstance, StaticPrimitiveInstance, VertexData},
+    data::{Color, DynamicPrimitiveInstance, LoadedMesh, StaticPrimitiveInstance, VertexData},
     handles::MeshHandle,
     loader::AssetLoader,
     opengl::{DynamicRenderData, Layout, StaticRenderData},
@@ -62,6 +62,14 @@ impl StaticMesh {
             rotation: cgmath::Vector3::new(0.0, 0.0, 0.0),
             scale: cgmath::Vector3::new(1.0, 1.0, 1.0),
         }
+    }
+
+    pub fn model_matrix(&self) -> cgmath::Matrix4<f32> {
+        cgmath::Matrix4::from_translation(self.translation)
+            * cgmath::Matrix4::from_angle_x(cgmath::Rad(self.rotation.x))
+            * cgmath::Matrix4::from_angle_y(cgmath::Rad(self.rotation.y))
+            * cgmath::Matrix4::from_angle_z(cgmath::Rad(self.rotation.z))
+            * cgmath::Matrix4::from_nonuniform_scale(self.scale.x, self.scale.y, self.scale.z)
     }
 
     pub fn render(&self, context: &glow::Context) {
@@ -143,6 +151,22 @@ impl DynamicMesh {
             rotation: cgmath::Vector3::new(0.0, 0.0, 0.0),
             scale: cgmath::Vector3::new(1.0, 1.0, 1.0),
         }
+    }
+
+    pub fn update_vertices(&mut self, context: &glow::Context, new_vertices: &[f32]) {
+        for primitive in &mut self.primitives {
+            if let Some(rd) = &mut primitive.render_data {
+                rd.update_vertices(context, new_vertices);
+            }
+        }
+    }
+
+    pub fn model_matrix(&self) -> cgmath::Matrix4<f32> {
+        cgmath::Matrix4::from_translation(self.translation)
+            * cgmath::Matrix4::from_angle_x(cgmath::Rad(self.rotation.x))
+            * cgmath::Matrix4::from_angle_y(cgmath::Rad(self.rotation.y))
+            * cgmath::Matrix4::from_angle_z(cgmath::Rad(self.rotation.z))
+            * cgmath::Matrix4::from_nonuniform_scale(self.scale.x, self.scale.y, self.scale.z)
     }
 
     pub fn render(&self, context: &glow::Context) {

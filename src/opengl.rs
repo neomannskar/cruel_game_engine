@@ -156,6 +156,18 @@ impl DynamicRenderData {
         }
     }
 
+    pub fn update_vertices(&mut self, context: &glow::Context, data: &[f32]) {
+        unsafe {
+            context.bind_buffer(glow::ARRAY_BUFFER, Some(self.vbo));
+            context.buffer_sub_data_u8_slice(
+                glow::ARRAY_BUFFER,
+                0,
+                bytemuck::cast_slice(data),
+            );
+            context.bind_buffer(glow::ARRAY_BUFFER, None);
+        }
+    }
+
     pub fn bind(&self, context: &glow::Context) {
         unsafe {
             context.bind_vertex_array(Some(self.vao));

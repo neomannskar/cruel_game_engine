@@ -60,9 +60,7 @@ enum Choice {
 }
 
 use crate::{
-    camera::Camera,
-    scene_graph::{SceneGraph, SelectedObject},
-    CameraType,
+    camera::Camera, loader::AssetLoader, mesh::StaticMesh, scene_graph::{SceneGraph, SelectedObject}, CameraType
 };
 
 pub struct Gui {
@@ -70,6 +68,7 @@ pub struct Gui {
     command_result_rx: Receiver<String>,
 
     choice: Choice,
+    wireframe: bool,
 
     terminal_input: String,
     terminal_lines: VecDeque<String>,
@@ -98,6 +97,7 @@ impl Gui {
             command_result_rx,
 
             choice: Choice::Console,
+            wireframe: false,
             terminal_input: String::new(),
             terminal_lines: VecDeque::new(),
             max_terminal_lines: 100,
@@ -157,9 +157,11 @@ impl Gui {
         &mut self,
         raw_input: egui::RawInput,
         ctx: &egui::Context,
+        context: &glow::Context,
         active_camera_type: &mut CameraType,
         camera: &mut dyn Camera,
         scene_graph: &mut SceneGraph,
+        asset_loader: &AssetLoader,
         delta_time: f64,
     ) -> egui::FullOutput {
         // Calculate the delta time
@@ -178,7 +180,7 @@ impl Gui {
             self.frame_count = 0;
         }
 
-        let current_scene = scene_graph.current_scene().unwrap();
+        let current_scene = scene_graph.current_scene_mut().unwrap();
 
         while let Ok(line) = self.command_result_rx.try_recv() {
             self.append_terminal(line);
@@ -487,9 +489,32 @@ impl Gui {
 
                             ui.menu_button("Add", |ui| {
                                 ui.menu_button("Mesh", |ui| {
+                                    ui.menu_button("Static Mesh", |ui| {
+                                        for (handle, loaded_mesh) in &asset_loader.loaded_mesh_data {
+                                            let mesh_name = loaded_mesh.name.as_str(); // or placeholder
+
+                                            if ui.button(mesh_name).clicked() {
+                                                let static_mesh = StaticMesh::new(
+                                                    context,                     // <-- Pass your glow context!
+                                                    mesh_name.to_string(),
+                                                    *handle,
+                                                    asset_loader,
+                                                );
+
+                                                current_scene.add_static_mesh(static_mesh);
+
+                                                self.append_terminal(format!("Added Static Mesh: {}", mesh_name));
+                                                ui.close_menu();
+                                            }
+                                        }
+                                    });
+
+
                                     if ui.button("Static Mesh").clicked() {
                                         // current_scene.add_static_mesh();
                                         self.append_terminal("Add Static Mesh ... TODO");
+
+                                        
 
                                         ui.close_menu();
                                     }
@@ -537,6 +562,18 @@ impl Gui {
                                 *active_camera_type = CameraType::Orthographic;
                             }
                         });
+
+                        ui.checkbox(&mut self.wireframe, "Wireframe");
+
+                        if self.wireframe {
+                            unsafe {
+                                context.polygon_mode(glow::FRONT_AND_BACK, glow::LINE);
+                            }
+                        } else {
+                            unsafe {
+                                context.polygon_mode(glow::FRONT_AND_BACK, glow::FILL);
+                            }
+                        }
                     });
 
                 ui.input(|input| {

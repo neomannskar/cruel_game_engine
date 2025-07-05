@@ -199,7 +199,7 @@ impl SceneGraph {
         }
     }
 
-    pub fn current_scene(&mut self) -> Option<&mut Box<SceneNode>> {
+    pub fn current_scene_mut(&mut self) -> Option<&mut Box<SceneNode>> {
         self.scenes.get_mut(self.current_scene)
     }
 }
