@@ -102,8 +102,12 @@ pub fn load_gltf_full(path: &Path) -> Result<LoadedMesh, String> {
                     ReadColors::RgbaF32(rgba) => {
                         vertex_data.colors.push(Color::Rgba(rgba.collect()));
                     }
-                    ReadColors::RgbU16(iter) => todo!(),
-                    ReadColors::RgbaU16(iter) => todo!(),
+                    ReadColors::RgbU16(_iter) => {
+                        println!("TODO");
+                    },
+                    ReadColors::RgbaU16(_iter) => {
+                        println!("TODO");
+                    },
                 }
             }
 

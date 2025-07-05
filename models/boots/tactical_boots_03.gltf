@@ -1,0 +1,192 @@
+{
+    "asset" : {
+        "generator" : "Khronos glTF Blender I/O v3.4.50",
+        "version" : "2.0"
+    },
+    "scene" : 0,
+    "scenes" : [
+        {
+            "name" : "Scene",
+            "nodes" : [
+                1
+            ]
+        }
+    ],
+    "nodes" : [
+        {
+            "mesh" : 0,
+            "name" : "tactical_boots_03",
+            "translation" : [
+                0,
+                -6.297229992924258e-05,
+                -0.03106810711324215
+            ]
+        },
+        {
+            "children" : [
+                0
+            ],
+            "name" : "military_boots_03_grp",
+            "scale" : [
+                100,
+                100,
+                100
+            ]
+        }
+    ],
+    "materials" : [
+        {
+            "doubleSided" : true,
+            "name" : "tactical_boots_03_mat.001",
+            "normalTexture" : {
+                "index" : 0
+            },
+            "occlusionTexture" : {
+                "index" : 1
+            },
+            "pbrMetallicRoughness" : {
+                "baseColorTexture" : {
+                    "index" : 2
+                },
+                "metallicRoughnessTexture" : {
+                    "index" : 1
+                }
+            }
+        }
+    ],
+    "meshes" : [
+        {
+            "name" : "tactical_boots_03.001",
+            "primitives" : [
+                {
+                    "attributes" : {
+                        "COLOR_0" : 0,
+                        "POSITION" : 1,
+                        "TEXCOORD_0" : 2,
+                        "NORMAL" : 3
+                    },
+                    "indices" : 4,
+                    "material" : 0
+                }
+            ]
+        }
+    ],
+    "textures" : [
+        {
+            "sampler" : 0,
+            "source" : 0
+        },
+        {
+            "sampler" : 0,
+            "source" : 1
+        },
+        {
+            "sampler" : 0,
+            "source" : 2
+        }
+    ],
+    "images" : [
+        {
+            "mimeType" : "image/png",
+            "name" : "tactical_boots_03_normal",
+            "uri" : "tactical_boots_03_normal.png"
+        },
+        {
+            "mimeType" : "image/png",
+            "name" : "tactical_boots_03_ao-tactical_boots_03_roughness-tactical_boots_03_metallic",
+            "uri" : "tactical_boots_03_ao-tactical_boots_03_roughness-tactical_boots_03_metallic.png"
+        },
+        {
+            "mimeType" : "image/png",
+            "name" : "tactical_boots_03_basecolor",
+            "uri" : "tactical_boots_03_basecolor.png"
+        }
+    ],
+    "accessors" : [
+        {
+            "bufferView" : 0,
+            "componentType" : 5123,
+            "count" : 7223,
+            "normalized" : true,
+            "type" : "VEC4"
+        },
+        {
+            "bufferView" : 1,
+            "componentType" : 5126,
+            "count" : 7223,
+            "max" : [
+                0.05969333276152611,
+                0.25642237067222595,
+                0.18737444281578064
+            ],
+            "min" : [
+                -0.05969333276152611,
+                6.297510117292404e-05,
+                -0.12523822486400604
+            ],
+            "type" : "VEC3"
+        },
+        {
+            "bufferView" : 2,
+            "componentType" : 5126,
+            "count" : 7223,
+            "type" : "VEC2"
+        },
+        {
+            "bufferView" : 3,
+            "componentType" : 5126,
+            "count" : 7223,
+            "type" : "VEC3"
+        },
+        {
+            "bufferView" : 4,
+            "componentType" : 5123,
+            "count" : 24753,
+            "type" : "SCALAR"
+        }
+    ],
+    "bufferViews" : [
+        {
+            "buffer" : 0,
+            "byteLength" : 57784,
+            "byteOffset" : 0,
+            "target" : 34962
+        },
+        {
+            "buffer" : 0,
+            "byteLength" : 86676,
+            "byteOffset" : 57784,
+            "target" : 34962
+        },
+        {
+            "buffer" : 0,
+            "byteLength" : 57784,
+            "byteOffset" : 144460,
+            "target" : 34962
+        },
+        {
+            "buffer" : 0,
+            "byteLength" : 86676,
+            "byteOffset" : 202244,
+            "target" : 34962
+        },
+        {
+            "buffer" : 0,
+            "byteLength" : 49506,
+            "byteOffset" : 288920,
+            "target" : 34963
+        }
+    ],
+    "samplers" : [
+        {
+            "magFilter" : 9729,
+            "minFilter" : 9987
+        }
+    ],
+    "buffers" : [
+        {
+            "byteLength" : 338428,
+            "uri" : "tactical_boots_03.bin"
+        }
+    ]
+}

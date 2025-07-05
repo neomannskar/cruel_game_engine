@@ -60,12 +60,14 @@ enum Choice {
 }
 
 use crate::{
-    camera::Camera, loader::AssetLoader, mesh::StaticMesh, scene_graph::{SceneGraph, SelectedObject}, CameraType
+    camera::Camera, loader::AssetLoader, mesh::StaticMesh, world::{SceneGraph, SelectedObject}, CameraType
 };
 
 pub struct Gui {
     command_tx: Sender<String>,
     command_result_rx: Receiver<String>,
+
+    mouse_delta_accumulator: Option<(f32, f32)>,
 
     choice: Choice,
     wireframe: bool,
@@ -95,6 +97,8 @@ impl Gui {
         let gui = Self {
             command_tx,
             command_result_rx,
+
+            mouse_delta_accumulator: None,
 
             choice: Choice::Console,
             wireframe: false,
@@ -184,6 +188,32 @@ impl Gui {
 
         while let Ok(line) = self.command_result_rx.try_recv() {
             self.append_terminal(line);
+        }
+
+        if let Some((mut acc_dx, mut acc_dy)) = self.mouse_delta_accumulator.take() {
+            // Clamp the maximum delta movement so camera doesn't spin uncontrollably
+            let max_delta = 75.0; // adjust as needed for your sensitivity
+            acc_dx = acc_dx.clamp(-max_delta, max_delta);
+            acc_dy = acc_dy.clamp(-max_delta, max_delta);
+                    
+            let rot_x = camera.get_sensitivity() * (acc_dy as f32) / camera.get_height() as f32;
+            let rot_y = camera.get_sensitivity() * (acc_dx as f32) / camera.get_width() as f32;
+
+            let right = camera.get_orientation().cross(camera.get_up()).normalize();
+            let pitch_quat = cgmath::Quaternion::from_axis_angle(right, cgmath::Deg(-rot_x));
+
+            let new_orientation = pitch_quat * camera.get_orientation();
+
+            let up_dot = new_orientation.dot(camera.get_up());
+            if up_dot.abs() < 0.99 {
+                camera.set_orientation(new_orientation);
+            }
+
+            let yaw_quat = cgmath::Quaternion::from_axis_angle(
+                camera.get_up(),
+                cgmath::Deg(-rot_y),
+            );
+            camera.set_orientation(yaw_quat * camera.get_orientation());
         }
 
         ctx.run(raw_input, |ctx| {
@@ -477,7 +507,110 @@ impl Gui {
                 });
 
             egui::CentralPanel::default().show(ctx, |ui| {
-                egui::TopBottomPanel::top("Toolbar")
+                ui.input(|input| {
+                    if input.pointer.button_down(egui::PointerButton::Primary) {
+                        if camera.get_first_click() {
+                            if let Some(pos) = input.pointer.hover_pos() {
+                                camera.set_last_mouse_pos(pos);
+                            }
+                            camera.set_first_click(false);
+                        }
+
+                        if let Some(pos) = input.pointer.hover_pos() {
+                            let dx = pos.x - camera.get_last_mouse_pos().x;
+                            let dy = pos.y - camera.get_last_mouse_pos().y;
+
+                            // Accumulate deltas
+                            self.mouse_delta_accumulator = Some(
+                                self.mouse_delta_accumulator
+                                    .map(|(acc_dx, acc_dy)| (acc_dx + dx, acc_dy + dy))
+                                    .unwrap_or((dx, dy)),
+                            );
+
+                            // Store last mouse pos for next delta calculation
+                            camera.set_last_mouse_pos(pos);
+                        }
+                    } else {
+                        camera.set_first_click(true);
+                    }
+                    
+                    if input.key_down(egui::Key::W) {
+                        camera.set_position(
+                            camera.get_position()
+                                + camera.get_speed() * camera.get_orientation() * delta_time as f32,
+                        );
+                    }
+                    if input.key_down(egui::Key::A) {
+                        camera.set_position(
+                            camera.get_position()
+                                + camera.get_speed()
+                                    * -cgmath::Vector3::normalize(cgmath::Vector3::cross(
+                                        camera.get_orientation(),
+                                        camera.get_up(),
+                                    ))
+                                    * delta_time as f32,
+                        );
+                    }
+                    if input.key_down(egui::Key::S) {
+                        camera.set_position(
+                            camera.get_position()
+                                + camera.get_speed()
+                                    * -camera.get_orientation()
+                                    * delta_time as f32,
+                        );
+                    }
+                    if input.key_down(egui::Key::D) {
+                        camera.set_position(
+                            camera.get_position()
+                                + camera.get_speed()
+                                    * cgmath::Vector3::normalize(cgmath::Vector3::cross(
+                                        camera.get_orientation(),
+                                        camera.get_up(),
+                                    ))
+                                    * delta_time as f32,
+                        );
+                    }
+                    if input.key_down(egui::Key::Space) {
+                        camera.set_position(
+                            camera.get_position()
+                                + camera.get_speed() * camera.get_up() * delta_time as f32,
+                        );
+                    }
+                    if input.key_down(egui::Key::ArrowDown) {
+                        camera.set_position(
+                            camera.get_position()
+                                + camera.get_speed() * -camera.get_up() * delta_time as f32,
+                        );
+                    }
+                });
+
+                ui.horizontal(|ui| {
+                    ui.heading(current_scene.name.clone());
+                    ui.hyperlink_to("Cruel Engine homepage", "https://www.cruelengine.com");
+                    ui.allocate_ui_with_layout(
+                        ui.available_size(),
+                        Layout::right_to_left(Align::Center),
+                        |ui| {
+                            ui.label(format!("FPS: {}", self.fps));
+                        },
+                    );
+                });
+
+                let rect = ui.max_rect();
+                let (x, y) = rect.min.into();
+                let (width, height) = rect.size().into();
+
+                let pixels_per_point = ctx.pixels_per_point();
+
+                // Set the viewport which the custom graphics will render in
+                self.viewport = Some(Viewport::new(
+                    (x * pixels_per_point) as i32,
+                    (y * pixels_per_point) as i32,
+                    (width * pixels_per_point) as i32,
+                    (height * pixels_per_point) as i32,
+                ));
+
+                egui::TopBottomPanel::bottom("Toolbar")
                     .resizable(false)
                     .show_inside(ui, |ui| {
                         ui.horizontal(|ui| {
@@ -491,11 +624,11 @@ impl Gui {
                                 ui.menu_button("Mesh", |ui| {
                                     ui.menu_button("Static Mesh", |ui| {
                                         for (handle, loaded_mesh) in &asset_loader.loaded_mesh_data {
-                                            let mesh_name = loaded_mesh.name.as_str(); // or placeholder
+                                            let mesh_name = loaded_mesh.name.as_str();
 
                                             if ui.button(mesh_name).clicked() {
                                                 let static_mesh = StaticMesh::new(
-                                                    context,                     // <-- Pass your glow context!
+                                                    context,
                                                     mesh_name.to_string(),
                                                     *handle,
                                                     asset_loader,
@@ -575,124 +708,6 @@ impl Gui {
                             }
                         }
                     });
-
-                ui.input(|input| {
-                    if input.key_down(egui::Key::W) {
-                        camera.set_position(
-                            camera.get_position()
-                                + camera.get_speed() * camera.get_orientation() * delta_time as f32,
-                        );
-                    }
-                    if input.key_down(egui::Key::A) {
-                        camera.set_position(
-                            camera.get_position()
-                                + camera.get_speed()
-                                    * -cgmath::Vector3::normalize(cgmath::Vector3::cross(
-                                        camera.get_orientation(),
-                                        camera.get_up(),
-                                    ))
-                                    * delta_time as f32,
-                        );
-                    }
-                    if input.key_down(egui::Key::S) {
-                        camera.set_position(
-                            camera.get_position()
-                                + camera.get_speed()
-                                    * -camera.get_orientation()
-                                    * delta_time as f32,
-                        );
-                    }
-                    if input.key_down(egui::Key::D) {
-                        camera.set_position(
-                            camera.get_position()
-                                + camera.get_speed()
-                                    * cgmath::Vector3::normalize(cgmath::Vector3::cross(
-                                        camera.get_orientation(),
-                                        camera.get_up(),
-                                    ))
-                                    * delta_time as f32,
-                        );
-                    }
-                    if input.key_down(egui::Key::Space) {
-                        camera.set_position(
-                            camera.get_position()
-                                + camera.get_speed() * camera.get_up() * delta_time as f32,
-                        );
-                    }
-                    if input.key_down(egui::Key::ArrowDown) {
-                        camera.set_position(
-                            camera.get_position()
-                                + camera.get_speed() * -camera.get_up() * delta_time as f32,
-                        );
-                    }
-                    if input.pointer.button_down(egui::PointerButton::Primary) {
-                        if camera.get_first_click() {
-                            if let Some(pos) = input.pointer.hover_pos() {
-                                camera.set_last_mouse_pos(pos); // store initial pos
-                            }
-                            camera.set_first_click(false);
-                        }
-
-                        if let Some(pos) = input.pointer.hover_pos() {
-                            // Calculate delta since last frame
-                            let delta_x = pos.x - camera.get_last_mouse_pos().x;
-                            let delta_y = pos.y - camera.get_last_mouse_pos().y;
-
-                            let rot_x = camera.get_sensitivity() * (delta_y as f32)
-                                / camera.get_height() as f32;
-                            let rot_y = camera.get_sensitivity() * (delta_x as f32)
-                                / camera.get_width() as f32;
-
-                            let right = camera.get_orientation().cross(camera.get_up()).normalize();
-                            let pitch_quat =
-                                cgmath::Quaternion::from_axis_angle(right, cgmath::Deg(-rot_x));
-
-                            let new_orientation = pitch_quat * camera.get_orientation();
-
-                            let up_dot = new_orientation.dot(camera.get_up());
-                            if up_dot.abs() < 0.99 {
-                                camera.set_orientation(new_orientation);
-                            }
-
-                            let yaw_quat = cgmath::Quaternion::from_axis_angle(
-                                camera.get_up(),
-                                cgmath::Deg(-rot_y),
-                            );
-                            camera.set_orientation(yaw_quat * camera.get_orientation());
-
-                            // Update last mouse pos
-                            camera.set_last_mouse_pos(pos);
-                        }
-                    } else {
-                        camera.set_first_click(true);
-                    }
-                });
-
-                ui.horizontal(|ui| {
-                    ui.heading(current_scene.name.clone());
-                    ui.hyperlink_to("Cruel Engine homepage", "https://www.cruelengine.com");
-                    ui.allocate_ui_with_layout(
-                        ui.available_size(),
-                        Layout::right_to_left(Align::Center),
-                        |ui| {
-                            ui.label(format!("FPS: {}", self.fps));
-                        },
-                    );
-                });
-
-                let rect = ui.max_rect();
-                let (x, y) = rect.min.into();
-                let (width, height) = rect.size().into();
-
-                let pixels_per_point = ctx.pixels_per_point();
-
-                // Set the viewport which the custom graphics will render in
-                self.viewport = Some(Viewport::new(
-                    (x * pixels_per_point) as i32,
-                    (y * pixels_per_point) as i32,
-                    (width * pixels_per_point) as i32,
-                    (height * pixels_per_point) as i32,
-                ));
             });
         })
     }

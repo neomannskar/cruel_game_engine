@@ -1,3 +1,4 @@
+use egui::text;
 use rayon::prelude::*;
 use std::ffi::CString;
 use std::num::NonZeroU32;
@@ -19,10 +20,10 @@ use winit::window::{Window, WindowId};
 
 use egui_winit::State as EguiState;
 
-mod graphics;
-
 mod data;
 mod handles;
+
+mod renderer;
 
 mod shaders;
 
@@ -46,14 +47,15 @@ mod material;
 mod mesh;
 mod opengl;
 
-mod scene_graph;
-use scene_graph::SceneGraph;
+mod world;
+use world::SceneGraph;
 
 use crate::camera::OrthographicCamera;
 use crate::loader::{Asset /* AssetHandle */};
 use crate::mesh::StaticMesh;
 use crate::opengl::Layout;
-use crate::scene_graph::SceneNode;
+use crate::renderer::Renderer;
+use crate::world::SceneNode;
 
 #[derive(PartialEq, Clone, Copy)]
 enum CameraType {
@@ -251,7 +253,7 @@ impl ApplicationHandler for App {
 
         // self.graphics_example = Some(GraphicsExample::new(self.gl.as_ref().unwrap()));
 
-        let cube_vertices: Vec<f32> = vec![
+        /* let cube_vertices: Vec<f32> = vec![
             // Each: x, y, z, u, v, r, g, b
 
             // Front face (+Z)
@@ -293,7 +295,7 @@ impl ApplicationHandler for App {
             12, 13, 14, 14, 15, 12, // Right
             16, 17, 18, 18, 19, 16, // Bottom
             20, 21, 22, 22, 23, 20, // Top
-        ];
+        ]; */
 
         /* Commented out for now
 
@@ -327,9 +329,27 @@ impl ApplicationHandler for App {
 
         let mut asset_loader = self.asset_loader.as_ref().unwrap().lock().unwrap();
         let loaded_assets = asset_loader.poll_loaded();
+        
         for (handle, asset) in loaded_assets {
             match asset {
                 Asset::Mesh(loaded_mesh) => {
+                    for primitive in &loaded_mesh.primitives {
+                        if let Some(material) = &primitive.material {
+                            for texture_path_opt in [
+                                &material.base_color_texture,
+                                &material.metallic_roughness_texture,
+                                &material.normal_texture,
+                                &material.occlusion_texture,
+                                &material.emissive_texture,
+                            ] {
+                                if let Some(texture_path) = texture_path_opt {
+                                    let absolute_path = loaded_mesh.path.parent().unwrap().join(texture_path);
+                                    asset_loader.request_texture(absolute_path, texture_path.to_str().unwrap().to_string());
+                                }
+                            }
+                        }
+                    }
+                    
                     asset_loader
                         .loaded_mesh_data
                         .insert(handle.as_mesh_handle().unwrap(), loaded_mesh);
@@ -518,7 +538,8 @@ impl ApplicationHandler for App {
                 if let Some(sg) = self.scene_graph.as_mut() {
                     if let Some(scene) = sg.current_scene_mut() {
                         scene.update(active_camera);
-                        scene.render(self.context.as_ref().unwrap(), active_camera, &self.gui.as_ref().unwrap().get_viewport(window).expect(
+                        
+                        Renderer::render(self.context.as_ref().unwrap(), &scene, active_camera, &self.gui.as_ref().unwrap().get_viewport(window).expect(
                         "Viewport not present, make sure to update the ui before calling this",
                         ),);
                     }
@@ -557,7 +578,7 @@ fn main() {
     // Add entities, components and systems to the app here
     app.request_texture("assets/texture.jpg", "sigma.jpg".to_string());
     app.request_mesh("models/bunny_gltf.glb", "bunny.glb".to_string());
-
+    app.request_mesh("models/boots/tactical_boots_03.gltf", "boots.gltf".to_string());
     // Run the app when behaviour is defined
     event_loop.run_app(&mut app).unwrap();
 }

@@ -2,7 +2,7 @@ use cgmath::SquareMatrix;
 use glow::HasContext;
 
 use crate::{
-    data::{Color, DynamicPrimitiveInstance, LoadedMesh, StaticPrimitiveInstance, VertexData},
+    data::{Color, DynamicPrimitiveInstance, StaticPrimitiveInstance, VertexData},
     handles::MeshHandle,
     loader::AssetLoader,
     opengl::{DynamicRenderData, Layout, StaticRenderData},

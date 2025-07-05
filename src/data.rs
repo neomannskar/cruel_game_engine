@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::opengl::{DynamicRenderData, StaticRenderData};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Color {
     Rgb(Vec<[f32; 3]>),
     Rgba(Vec<[f32; 4]>),
