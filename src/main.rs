@@ -29,6 +29,8 @@ mod shaders;
 mod loader;
 use loader::AssetLoader;
 
+mod ecs;
+
 mod gui;
 use gui::Gui;
 
