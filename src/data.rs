@@ -4,12 +4,12 @@ use crate::opengl::{DynamicRenderData, StaticRenderData};
 
 #[derive(Debug, Clone)]
 pub enum Color {
-    Rgb(Vec<[f32; 3]>),
-    Rgba(Vec<[f32; 4]>),
+    Rgb([f32; 3]),
+    Rgba([f32; 4]),
 }
 
 #[derive(Debug)]
-pub struct Uv(pub Vec<[f32; 2]>);
+pub struct Uv(pub [f32; 2]);
 
 #[derive(Debug)]
 pub struct VertexData {
@@ -55,7 +55,7 @@ pub struct LoadedMaterial {
 
 #[derive(Debug)]
 pub struct LoadedPrimitive {
-    pub vertex_data: VertexData,
+    pub vertex_data: Box<VertexData>,
     pub material: Option<LoadedMaterial>,
     pub indices: Option<Vec<u32>>,
 }
